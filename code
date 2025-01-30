@@ -1,0 +1,171 @@
+//Ο ΚΩΔΙΚΑΣ ΓΙΑ ΤΟ ESHOP
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define PORT 8080
+#define MAX_PRODUCTS 20
+#define MAX_CLIENTS 5
+
+typedef struct {
+    char description[50];
+    float price;
+    int item_count;
+    int *total_requests;
+    int *total_sold;
+    char not_served[10][5]; // Λίστα πελατών που δεν εξυπηρετήθηκαν
+    int not_served_count;
+} Product;
+
+Product catalog[MAX_PRODUCTS];
+
+// Αρχικοποίηση προϊόντων
+void init_catalog() {
+    for (int i = 0; i < MAX_PRODUCTS; i++) {
+        sprintf(catalog[i].description, "Product %d", i);
+        catalog[i].price = (rand() % 100) + 1;
+        catalog[i].item_count = 2;
+        catalog[i].total_requests = 0;
+        catalog[i].total_sold = 0;
+        catalog[i].not_served_count = 0;
+    }
+}
+
+// Διαχείριση παραγγελίας
+void handle_order(int client_sock, char *client_name) {
+    int product_id;
+    read(client_sock, &product_id, sizeof(int));
+
+    if (product_id < 0 || product_id >= MAX_PRODUCTS) {
+        printf("Invalid product ID received.\n");
+        return;
+    }
+
+    Product *product = &catalog[product_id];
+    product->total_requests++;
+
+    char response[100];
+    if (product->item_count > 0) {
+        product->item_count--;
+        product->total_sold++;
+        sprintf(response, "Order confirmed! %s bought %s for $%.2f\n", client_name, product->description, product->price);
+    } else {
+        sprintf(response, "Order failed! %s not available.\n", product->description);
+        strcpy(product->not_served[product->not_served_count], client_name);
+        product->not_served_count++;
+    }
+
+    write(client_sock, response, strlen(response) + 1);
+    sleep(1); // Χρόνος διεκπεραίωσης
+}
+
+// Εκτύπωση αναφοράς
+void print_report() {
+    printf("\n--- Sales Report ---\n");
+    int total_orders = 0, total_success = 0, total_failures = 0;
+    float total_revenue = 0;
+
+    for (int i = 0; i < MAX_PRODUCTS; i++) {
+        printf("\nProduct: %s\n", catalog[i].description);
+        printf("Total Requests: %d\n", catalog[i].total_requests);
+        printf("Total Sold: %d\n", catalog[i].total_sold);
+        printf("Not Served Clients: ");
+        for (int j = 0; j < catalog[i].not_served_count; j++) {
+            printf("%s ", catalog[i].not_served[j]);
+        }
+        printf("\n");
+
+        total_orders += catalog[i].total_requests;
+        total_success += catalog[i].total_sold;
+        total_failures += catalog[i].not_served_count;
+        total_revenue += catalog[i].total_sold * catalog[i].price;
+    }
+
+    printf("\n--- Summary ---\n");
+    printf("Total Orders: %d\n", total_orders);
+    printf("Total Successful Orders: %d\n", total_success);
+    printf("Total Failed Orders: %d\n", total_failures);
+    printf("Total Revenue: $%.2f\n", total_revenue);
+}
+
+int main() {
+    srand(time(NULL));
+    init_catalog();
+
+    int server_sock, client_sock;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_size = sizeof(client_addr);
+
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    listen(server_sock, MAX_CLIENTS);
+
+    printf("E-shop server started. Waiting for clients...\n");
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_size);
+        if (fork() == 0) { // Νέα διεργασία για τον πελάτη
+            close(server_sock);
+            char client_name[20];
+            sprintf(client_name, "Client %d", i + 1);
+            for (int j = 0; j < 10; j++) {
+                handle_order(client_sock, client_name);
+            }
+            close(client_sock);
+            exit(0);
+        }
+        close(client_sock);
+    }
+
+    while (wait(NULL) > 0); // Αναμονή για όλους τους πελάτες
+    print_report();
+    close(server_sock);
+    return 0;
+}
+
+//Ο ΚΩΔΙΚΑΣ ΓΙΑ ΤΟΥΣ CLIENTS
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8080
+#define SERVER_IP "127.0.0.1"
+
+int main() {
+    srand(getpid()); // Κάθε διεργασία πελάτη έχει διαφορετικό seed για rand()
+
+    int sock;
+    struct sockaddr_in server_addr;
+    char response[100];
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
+
+    connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
+
+    for (int i = 0; i < 10; i++) {
+        int product_id = rand() % 20;
+        write(sock, &product_id, sizeof(int));
+
+        read(sock, response, sizeof(response));
+        printf("Client received: %s", response);
+
+        sleep(1);
+    }
+
+    close(sock);
+    return 0;
+}
